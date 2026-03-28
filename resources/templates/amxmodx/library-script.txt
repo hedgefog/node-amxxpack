@@ -8,6 +8,6 @@ public plugin_init() {
   register_plugin("{{PLUGIN_NAME}}", "{{PLUGIN_VERSION}}", "{{PLUGIN_AUTHOR}}");
 }
 
-public plugin_native() {
+public plugin_natives() {
   register_library("{{LIBRARY_NAME}}");
 }
