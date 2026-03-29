@@ -1,7 +1,7 @@
 import path from 'path';
 import globule from 'globule';
 import normalizePath from 'normalize-path';
-import { find, map } from 'lodash';
+import { chunk, find, flatMap, map } from 'lodash';
 import fs from 'fs';
 import { FSWatcher } from 'chokidar';
 
@@ -23,6 +23,7 @@ export default class BuilderService {
   private watchingTargets: Map<IResolvedTarget, TargetCallback>;
   private watcher: FSWatcher;
   private cacheFile: string;
+  private includeDirs: string[] = [];
 
   constructor(private projectConfig: IResolvedProjectConfig, private options: IBuildOptions = {}) {
     if (!this.options.noCache) {
@@ -55,6 +56,8 @@ export default class BuilderService {
   }
 
   async buildScripts(options: { pattern?: string; skipCompilation?: boolean; ignoreErrors?: boolean } = {}): Promise<boolean> {
+    this.updateIncludeDirs();
+
     const { fileExtensions } = this.projectConfig.compiler.config;
 
     let success = true;
@@ -101,7 +104,10 @@ export default class BuilderService {
 
   async watchScripts(): Promise<void> {
     for (const target of this.projectConfig.targets.scripts) {
-      this.addTargetToWatcher(target, filePath => this.updateScriptAndPlugin(filePath));
+      this.addTargetToWatcher(target, async filePath => {
+        this.updateIncludeDirs();
+        await this.updateScriptAndPlugin(filePath);
+      });
     }
   }
 
@@ -231,16 +237,7 @@ export default class BuilderService {
       path: srcPath,
       dest: pluginDestPath,
       compiler: executablePath,
-      includeDir: [
-        path.join(this.projectConfig.compiler.dir, 'include'),
-        ...this.projectConfig.include,
-        ...map(
-          globule.find(
-            map(this.projectConfig.targets.include, target => path.join(target.src, '**/'))
-          ),
-          dir => path.resolve(dir)
-        )
-      ]
+      includeDir: this.includeDirs
     });
 
     if (this.cache) {
@@ -280,11 +277,18 @@ export default class BuilderService {
 
     const { fileExtensions } = this.projectConfig.compiler.config;
 
-    const dependents = this.cache.getDependents(filePath);
-    for (const srcPath of dependents) {
-      if (fileExtensions.script !== path.extname(srcPath).slice(1)) continue;
+    this.updateIncludeDirs();
 
-      await this.updateScriptAndPlugin(srcPath);
+    const dependents = this.cache.getDependents(filePath);
+
+    for (const dependentsChunk of chunk(dependents, this.projectConfig.concurrency)) {
+      await Promise.all(
+        map(dependentsChunk, async srcPath => {
+          if (fileExtensions.script !== path.extname(srcPath).slice(1)) return;
+  
+          await this.updateScriptAndPlugin(srcPath);
+        })
+      );
     }
   }
 
@@ -295,22 +299,25 @@ export default class BuilderService {
   ): Promise<void> {
     const files = globule.find(path.join(target.src, pattern), { nodir: true });
 
-    await files.reduce(
-      (acc, filePath) => acc.then(async () => {
-        if (target.filter) {
-          const srcFile = path.relative(target.src, filePath);
-          if (!this.execPathFilter(srcFile, target.filter)) return;
-        }
+    for (const filesChunk of chunk(files, this.projectConfig.concurrency)) {
+      try {
+        await Promise.all(
+          map(filesChunk, async filePath => {
+            if (target.filter) {
+              const srcFile = path.relative(target.src, filePath);
+              if (!this.execPathFilter(srcFile, target.filter)) return;
+            }
 
-        this.setFileTarget(filePath, target);
-        await cb(path.normalize(filePath));
-
+            this.setFileTarget(filePath, target);
+            await cb(path.normalize(filePath));
+          })
+        );
+      } finally {
         if (this.cache) {
           this.cache.save(this.cacheFile);
         }
-      }),
-      Promise.resolve()
-    );
+      }
+    }
   }
 
   private addTargetToWatcher(target: IResolvedTarget, callback: TargetCallback) {
@@ -383,7 +390,7 @@ export default class BuilderService {
 
     // Ignore includes from project include directories (not the input includes)
     for (const includeDir of this.projectConfig.include) {
-      for (const include of fs.readdirSync(includeDir)) {
+      for (const include of globule.find(path.join(includeDir, '*'), { nodir: true })) {
         const { name, ext } = path.parse(include);
         if (ext.slice(1) != fileExtensions.include) continue;
         ignoredIncludes.push(name);
@@ -505,5 +512,23 @@ export default class BuilderService {
         this.cache.deleteFile(dependent.path);
       }
     }
+  }
+
+  private updateIncludeDirs() {
+    this.includeDirs = [
+      path.join(this.projectConfig.compiler.dir, 'include'),
+      ...map(
+        globule.find(
+          map(this.projectConfig.include, target => path.join(target, '/'))
+        ),
+        dir => path.resolve(dir)
+      ),
+      ...map(
+        globule.find(
+          map(this.projectConfig.targets.include, target => path.join(target.src, '**/'))
+        ),
+        dir => path.resolve(dir)
+      )
+    ];
   }
 }
