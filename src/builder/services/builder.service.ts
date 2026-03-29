@@ -382,7 +382,7 @@ export default class BuilderService {
 
     // Ignore includes from project include directories (not the input includes)
     for (const includeDir of this.projectConfig.include) {
-      for (const include of fs.readdirSync(includeDir)) {
+      for (const include of globule.find(path.join(includeDir, '*'), { nodir: true })) {
         const { name, ext } = path.parse(include);
         if (ext.slice(1) != fileExtensions.include) continue;
         ignoredIncludes.push(name);
@@ -509,7 +509,12 @@ export default class BuilderService {
   private updateIncludeDirs() {
     this.includeDirs = [
       path.join(this.projectConfig.compiler.dir, 'include'),
-      ...this.projectConfig.include,
+      ...map(
+        globule.find(
+          map(this.projectConfig.include, target => path.join(target, '/'))
+        ),
+        dir => path.resolve(dir)
+      ),
       ...map(
         globule.find(
           map(this.projectConfig.targets.include, target => path.join(target.src, '**/'))
