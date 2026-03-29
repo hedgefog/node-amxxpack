@@ -23,6 +23,7 @@ export default class BuilderService {
   private watchingTargets: Map<IResolvedTarget, TargetCallback>;
   private watcher: FSWatcher;
   private cacheFile: string;
+  private includeDirs: string[] = [];
 
   constructor(private projectConfig: IResolvedProjectConfig, private options: IBuildOptions = {}) {
     if (!this.options.noCache) {
@@ -55,6 +56,8 @@ export default class BuilderService {
   }
 
   async buildScripts(options: { pattern?: string; skipCompilation?: boolean; ignoreErrors?: boolean } = {}): Promise<boolean> {
+    this.updateIncludeDirs();
+
     const { fileExtensions } = this.projectConfig.compiler.config;
 
     let success = true;
@@ -101,7 +104,10 @@ export default class BuilderService {
 
   async watchScripts(): Promise<void> {
     for (const target of this.projectConfig.targets.scripts) {
-      this.addTargetToWatcher(target, filePath => this.updateScriptAndPlugin(filePath));
+      this.addTargetToWatcher(target, async filePath => {
+        this.updateIncludeDirs();
+        await this.updateScriptAndPlugin(filePath);
+      });
     }
   }
 
@@ -231,16 +237,7 @@ export default class BuilderService {
       path: srcPath,
       dest: pluginDestPath,
       compiler: executablePath,
-      includeDir: [
-        path.join(this.projectConfig.compiler.dir, 'include'),
-        ...this.projectConfig.include,
-        ...map(
-          globule.find(
-            map(this.projectConfig.targets.include, target => path.join(target.src, '**/'))
-          ),
-          dir => path.resolve(dir)
-        )
-      ]
+      includeDir: this.includeDirs
     });
 
     if (this.cache) {
@@ -279,6 +276,8 @@ export default class BuilderService {
     if (!this.projectConfig.rules.rebuildDependents) return;
 
     const { fileExtensions } = this.projectConfig.compiler.config;
+
+    this.updateIncludeDirs();
 
     const dependents = this.cache.getDependents(filePath);
     for (const srcPath of dependents) {
@@ -505,5 +504,18 @@ export default class BuilderService {
         this.cache.deleteFile(dependent.path);
       }
     }
+  }
+
+  private updateIncludeDirs() {
+    this.includeDirs = [
+      path.join(this.projectConfig.compiler.dir, 'include'),
+      ...this.projectConfig.include,
+      ...map(
+        globule.find(
+          map(this.projectConfig.targets.include, target => path.join(target.src, '**/'))
+        ),
+        dir => path.resolve(dir)
+      )
+    ];
   }
 }
