@@ -63,6 +63,7 @@ export interface IProjectConfig {
       }
     };
   };
+  concurrency?: number;
 }
 
 export interface IResolvedTarget {
@@ -97,4 +98,5 @@ export interface IResolvedProjectConfig {
     scripts: IResolvedTarget[];
     plugins: IResolvedTarget[];
   };
+  concurrency: number;
 }

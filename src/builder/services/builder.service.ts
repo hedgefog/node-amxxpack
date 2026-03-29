@@ -1,7 +1,7 @@
 import path from 'path';
 import globule from 'globule';
 import normalizePath from 'normalize-path';
-import { find, map } from 'lodash';
+import { chunk, find, flatMap, map } from 'lodash';
 import fs from 'fs';
 import { FSWatcher } from 'chokidar';
 
@@ -280,10 +280,15 @@ export default class BuilderService {
     this.updateIncludeDirs();
 
     const dependents = this.cache.getDependents(filePath);
-    for (const srcPath of dependents) {
-      if (fileExtensions.script !== path.extname(srcPath).slice(1)) continue;
 
-      await this.updateScriptAndPlugin(srcPath);
+    for (const dependentsChunk of chunk(dependents, this.projectConfig.concurrency)) {
+      await Promise.all(
+        map(dependentsChunk, async srcPath => {
+          if (fileExtensions.script !== path.extname(srcPath).slice(1)) return;
+  
+          await this.updateScriptAndPlugin(srcPath);
+        })
+      );
     }
   }
 
@@ -294,22 +299,25 @@ export default class BuilderService {
   ): Promise<void> {
     const files = globule.find(path.join(target.src, pattern), { nodir: true });
 
-    await files.reduce(
-      (acc, filePath) => acc.then(async () => {
-        if (target.filter) {
-          const srcFile = path.relative(target.src, filePath);
-          if (!this.execPathFilter(srcFile, target.filter)) return;
-        }
+    for (const filesChunk of chunk(files, this.projectConfig.concurrency)) {
+      try {
+        await Promise.all(
+          map(filesChunk, async filePath => {
+            if (target.filter) {
+              const srcFile = path.relative(target.src, filePath);
+              if (!this.execPathFilter(srcFile, target.filter)) return;
+            }
 
-        this.setFileTarget(filePath, target);
-        await cb(path.normalize(filePath));
-
+            this.setFileTarget(filePath, target);
+            await cb(path.normalize(filePath));
+          })
+        );
+      } finally {
         if (this.cache) {
           this.cache.save(this.cacheFile);
         }
-      }),
-      Promise.resolve()
-    );
+      }
+    }
   }
 
   private addTargetToWatcher(target: IResolvedTarget, callback: TargetCallback) {

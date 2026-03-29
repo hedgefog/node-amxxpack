@@ -141,7 +141,8 @@ export function createProjectConfig(type: string, overrides: PartialDeep<IProjec
     rules: {
       flatCompilation: projectConfig.rules.flatCompilation,
       rebuildDependents: projectConfig.rules.rebuildDependents
-    }
+    },
+    concurrency: projectConfig.concurrency ?? 3
   };
 }
 
